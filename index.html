@@ -118,7 +118,8 @@ map.on('load', () => {
     _customRender: () => deckgl.redraw('custom'),
   });
 
-  map.on('move',   () => deckgl.setProps({ viewState: getVS() }));
+  map.on('move',   () => { deckgl.setProps({ viewState: getVS() }); deckgl.redraw('move'); });
+  map.on('render', () => deckgl.redraw('map-render'));
   map.on('resize', () => {
     const w = window.innerWidth, h = window.innerHeight;
     canvas.width = w; canvas.height = h;
@@ -127,6 +128,7 @@ map.on('load', () => {
 
   mapReady = true;
   if (allData.length) renderArcs();
+  setTimeout(() => deckgl.redraw('init'), 100);
 });
 
 window.addEventListener('resize', () => {
