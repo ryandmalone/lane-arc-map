@@ -210,12 +210,8 @@ function loadSampleData() {
 
 // ─── Timeline ─────────────────────────────────────────────────────────────────
 function buildTimeline() {
-  if (playTimer) cancelAnimationFrame(playTimer);
   if (mapReady) renderArcs();
 }
-
-const LOOP = 3000;
-const TRAIL = 2400; // long enough that it never fully fades before restarting
 
 function renderArcs() {
   if (!overlay || !allData.length) return;
@@ -223,36 +219,37 @@ function renderArcs() {
 
   const maxS = Math.max(...allData.map(r => r.shipments), 1);
   const tip = document.getElementById('tooltip');
+  const DURATION = 1500; // ms each arc takes to draw
+  const STAGGER  = 120;  // ms between each arc starting
 
-  const trips = allData.map((d, i) => ({
-    ...d,
-    offset: (i / allData.length) * LOOP,
-    path: [
-      [d.originLng, d.originLat],
-      [(d.originLng + d.destLng) / 2,
-       (d.originLat + d.destLat) / 2 + Math.hypot(d.destLng - d.originLng, d.destLat - d.originLat) * 0.4],
-      [d.destLng, d.destLat],
-    ],
-    timestamps: [0, LOOP / 2, LOOP],
-  }));
+  const startTime = performance.now();
 
-  let time = 0;
-  function frame() {
-    time = (time + 16) % LOOP;
+  function frame(now) {
+    const elapsed = now - startTime;
+
+    // Each arc gets a progress 0→1 based on its staggered start
+    const visible = allData.map((d, i) => {
+      const t = Math.min(1, Math.max(0, (elapsed - i * STAGGER) / DURATION));
+      // Interpolate target position along the arc path using t
+      // When t=1 target = actual destination (fully drawn)
+      // When t<1 target = point along great circle
+      const lng = d.originLng + (d.destLng - d.originLng) * t;
+      const lat = d.originLat + (d.destLat - d.originLat) * t;
+      return { ...d, animDestLng: lng, animDestLat: lat, alpha: Math.round(t * 200) };
+    });
 
     overlay.setProps({
       layers: [
-        new deck.TripsLayer({
-          id: 'trips',
-          data: trips,
-          getPath: d => d.path,
-          getTimestamps: d => d.timestamps.map(t => (t + d.offset) % LOOP),
-          getColor: [0, 69, 147],
-          widthMinPixels: 2,
+        new deck.ArcLayer({
+          id: 'arcs',
+          data: visible,
+          getSourcePosition: d => [d.originLng, d.originLat],
+          getTargetPosition: d => [d.animDestLng, d.animDestLat],
+          getSourceColor: d => [0, 69, 147, d.alpha],
+          getTargetColor: d => [0, 69, 147, d.alpha],
           getWidth: d => Math.max(1, (d.shipments / maxS) * 5),
-          trailLength: TRAIL,
-          currentTime: time,
-          shadowEnabled: false,
+          getHeight: 0.4,
+          updateTriggers: { getTargetPosition: elapsed, getSourceColor: elapsed, getTargetColor: elapsed },
           pickable: true,
           onHover: ({ object, x, y }) => {
             if (object) {
@@ -267,7 +264,9 @@ function renderArcs() {
       ]
     });
 
-    playTimer = requestAnimationFrame(frame);
+    // Keep animating until all arcs are fully drawn
+    const allDone = elapsed > (allData.length - 1) * STAGGER + DURATION;
+    if (!allDone) playTimer = requestAnimationFrame(frame);
   }
 
   playTimer = requestAnimationFrame(frame);
