@@ -274,7 +274,7 @@ function ingestData(cfg, rows) {
       destLat:   dLat, destLng:   dLng,
       spend:     parseFloat(rows[colId('total_spend')]?.[i])    || 0,
       shipments: parseInt(rows[colId('shipment_count')]?.[i])   || 0,
-      month:     String(rows[colId('month')]?.[i] ?? ''),
+      month: fmtMonthKey(rows[colId('month')]?.[i]),
     });
   }
 
@@ -387,6 +387,13 @@ document.getElementById('scrubber').addEventListener('input', e => {
 });
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
+function fmtMonthKey(v) {
+  if (!v) return '';
+  // Handle Unix ms timestamps (e.g. 1764547200000) or date strings
+  const d = new Date(typeof v === 'number' ? v : Date.parse(v));
+  if (isNaN(d)) return String(v);
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+}
 function fmtMonth(m) {
   if (!m) return '—';
   const [y, mo] = m.split('-');
