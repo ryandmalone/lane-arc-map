@@ -111,8 +111,8 @@ map.on('load', () => {
     width: window.innerWidth, height: window.innerHeight,
     viewState: getVS(),
     controller: false,
+    map: false,
     layers: [],
-    onWebGLInitialized: (gl) => { gl.enable(gl.BLEND); },
   });
   map.on('move', () => deckgl.setProps({ viewState: getVS() }));
   mapReady = true;
