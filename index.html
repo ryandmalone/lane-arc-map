@@ -103,27 +103,25 @@ const map = new maplibregl.Map({
 });
 
 map.on('load', () => {
-  const canvas = document.getElementById('deck-canvas');
-  canvas.width  = window.innerWidth;
-  canvas.height = window.innerHeight;
-  deckgl = new deck.DeckGL({
-    canvas,
-    width: window.innerWidth, height: window.innerHeight,
+  deckgl = new deck.Deck({
+    gl: map.painter.context.gl,
+    layers: [],
     viewState: getVS(),
     controller: false,
-    map: false,
-    layers: [],
+    onBeforeRender: () => {
+      deckgl.setProps({ viewState: getVS() });
+    },
   });
-  map.on('move', () => deckgl.setProps({ viewState: getVS() }));
   mapReady = true;
+  // Re-render deck layers on every map repaint
+  map.on('render', () => {
+    if (deckgl) deckgl.redraw(true);
+  });
   if (allData.length) renderArcs();
 });
 
 window.addEventListener('resize', () => {
-  const w = window.innerWidth, h = window.innerHeight;
-  const c = document.getElementById('deck-canvas');
-  c.width = w; c.height = h;
-  deckgl?.setProps({ width: w, height: h });
+  deckgl?.setProps({ viewState: getVS() });
 });
 
 function getVS() {
@@ -322,7 +320,6 @@ function renderArcs() {
   deckgl.setProps({
     viewState: { ...getVS(), transitionDuration: 0 },
     layers: [
-      // Dimmed background — all lanes
       new deck.ArcLayer({
         id: 'arcs-bg', data: allData,
         getSourcePosition: d => [d.originLng, d.originLat],
@@ -332,7 +329,6 @@ function renderArcs() {
         getWidth: d => Math.max(0.5, (d.shipments / maxS) * 4),
         getHeight: 0.35, pickable: false,
       }),
-      // Bright foreground — current month only
       new deck.ArcLayer({
         id: 'arcs-fg', data: activeData,
         getSourcePosition: d => [d.originLng, d.originLat],
