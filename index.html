@@ -241,20 +241,11 @@ function subscribe(elementId, cfg) {
 
 // ─── Ingest ───────────────────────────────────────────────────────────────────
 function ingestData(cfg, rows) {
-  // cfg[slotName] = columnId;  rows[columnId] = any[]
   const colId = name => cfg[name];
   const latColId = colId('origin_lat');
+  console.log('[ArcMap] ingestData latColId:', latColId, 'rowKeys:', Object.keys(rows).slice(0,5));
 
   if (!latColId || !rows[latColId]?.length) {
-    // Last resort: maybe rows is keyed by slot name instead of columnId
-    // Try treating row keys as slot names directly
-    const directLat = rows['origin_lat'];
-    if (directLat?.length) {
-      // Remap slot-keyed rows → colId-keyed rows using cfg
-      const remapped = {};
-      for (const slot of Object.keys(cfg)) remapped[cfg[slot]] = rows[slot];
-      return ingestData(cfg, remapped);
-    }
     setStatus(`⚠ No data.\nExpected colId: ${latColId}\nGot keys: ${Object.keys(rows).slice(0,4).join(', ')}`, 'err');
     return;
   }
