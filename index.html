@@ -215,6 +215,7 @@ function buildTimeline() {
 }
 
 const LOOP = 3000;
+const TRAIL = 2400; // long enough that it never fully fades before restarting
 
 function renderArcs() {
   if (!overlay || !allData.length) return;
@@ -223,39 +224,35 @@ function renderArcs() {
   const maxS = Math.max(...allData.map(r => r.shipments), 1);
   const tip = document.getElementById('tooltip');
 
-  // Pre-compute bezier control points matching deck.gl's ArcLayer curve
-  const arcs = allData.map((d, i) => ({
+  const trips = allData.map((d, i) => ({
     ...d,
     offset: (i / allData.length) * LOOP,
-    // deck.gl ArcLayer lifts the midpoint by getHeight * great-circle distance
-    // approximate with a lat offset proportional to distance
-    cx: (d.originLng + d.destLng) / 2,
-    cy: (d.originLat + d.destLat) / 2 + Math.hypot(d.destLng - d.originLng, d.destLat - d.originLat) * 0.4,
+    path: [
+      [d.originLng, d.originLat],
+      [(d.originLng + d.destLng) / 2,
+       (d.originLat + d.destLat) / 2 + Math.hypot(d.destLng - d.originLng, d.destLat - d.originLat) * 0.4],
+      [d.destLng, d.destLat],
+    ],
+    timestamps: [0, LOOP / 2, LOOP],
   }));
 
   let time = 0;
   function frame() {
     time = (time + 16) % LOOP;
 
-    // Compute yellow dot positions along bezier
-    const dots = arcs.map(d => {
-      const t = ((time + d.offset) % LOOP) / LOOP;
-      const x = (1-t)*(1-t)*d.originLng + 2*(1-t)*t*d.cx + t*t*d.destLng;
-      const y = (1-t)*(1-t)*d.originLat + 2*(1-t)*t*d.cy + t*t*d.destLat;
-      return { position: [x, y], shipments: d.shipments };
-    });
-
     overlay.setProps({
       layers: [
-        new deck.ArcLayer({
-          id: 'arcs',
-          data: allData,
-          getSourcePosition: d => [d.originLng, d.originLat],
-          getTargetPosition: d => [d.destLng, d.destLat],
-          getSourceColor: [0, 69, 147, 200],
-          getTargetColor: [0, 69, 147, 200],
+        new deck.TripsLayer({
+          id: 'trips',
+          data: trips,
+          getPath: d => d.path,
+          getTimestamps: d => d.timestamps.map(t => (t + d.offset) % LOOP),
+          getColor: [0, 69, 147],
+          widthMinPixels: 2,
           getWidth: d => Math.max(1, (d.shipments / maxS) * 5),
-          getHeight: 0.4,
+          trailLength: TRAIL,
+          currentTime: time,
+          shadowEnabled: false,
           pickable: true,
           onHover: ({ object, x, y }) => {
             if (object) {
@@ -266,15 +263,6 @@ function renderArcs() {
                 Shipments: ${object.shipments.toLocaleString()}`;
             } else tip.style.display = 'none';
           },
-        }),
-        new deck.ScatterplotLayer({
-          id: 'dots',
-          data: dots,
-          getPosition: d => d.position,
-          getRadius: d => Math.max(4, (d.shipments / maxS) * 10),
-          radiusUnits: 'pixels',
-          getFillColor: [255, 187, 27, 255],
-          pickable: false,
         }),
       ]
     });
