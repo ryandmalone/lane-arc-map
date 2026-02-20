@@ -193,6 +193,7 @@ try {
 function subscribe(elementId, cfg) {
   const el = sigmaClient.elements;
   const accRows = {};
+  let retried = false;
   fetching = false;
 
   const onData = (payload) => {
@@ -229,10 +230,10 @@ function subscribe(elementId, cfg) {
     elementUnsub = typeof unsub === 'function' ? unsub
                  : typeof unsub?.unsubscribe === 'function' ? unsub.unsubscribe.bind(unsub)
                  : () => {};
-    // Do NOT call fetchMoreElementData here — subscribeToElementData
-    // delivers the first page automatically once the element is ready.
-    // Calling it early causes a 409 conflict and the callback never fires.
-    setStatus('✓ Subscribed — waiting for data…');
+    // Delay fetchMore slightly so the subscription is fully registered
+    // before we request data — calling it immediately causes a 409
+    setTimeout(() => el.fetchMoreElementData(elementId), 300);
+    setStatus('✓ Subscribed — loading data…');
   } catch(e) {
     setStatus(`❌ Subscribe failed:\n${e.message}`, 'err');
   }
