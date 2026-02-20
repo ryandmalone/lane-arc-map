@@ -226,59 +226,62 @@ function buildTimeline() {
   if (mapReady) renderArcs();
 }
 
-// ─── Render ───────────────────────────────────────────────────────────────────
-const LOOP = 2000; // ms for one full pulse cycle
-const TRAIL = 1800; // nearly full trail length = always visible
-
 function renderArcs() {
   if (!overlay || !allData.length) return;
+  if (playTimer) cancelAnimationFrame(playTimer);
 
-  // Stagger each lane's start time so they don't all pulse at once
-  const trips = allData.map((d, i) => ({
-    ...d,
-    offset: (i / allData.length) * LOOP,
-    path: [
-      [d.originLng, d.originLat],
-      // midpoint with arc height approximation
-      [(d.originLng + d.destLng) / 2, (d.originLat + d.destLat) / 2 + 3],
-      [d.destLng, d.destLat],
-    ],
-    timestamps: [0, LOOP / 2, LOOP],
-  }));
+  const maxS = Math.max(...allData.map(r => r.shipments), 1);
 
   document.getElementById('month-label').textContent = '';
   document.getElementById('stat-lanes').textContent = allData.length.toLocaleString();
   document.getElementById('stat-spend').textContent = fmtMoney(allData.reduce((a, r) => a + r.spend, 0));
 
-  let time = 0;
   const tip = document.getElementById('tooltip');
+  let time = 0;
 
   function frame() {
     time = (time + 16) % LOOP;
 
     overlay.setProps({
       layers: [
-        new deck.TripsLayer({
-          id: 'trips-trail',
-          data: trips,
-          getPath: d => d.path,
-          getTimestamps: d => d.timestamps.map(t => (t + d.offset) % LOOP),
-          getColor: [0, 69, 147],       // #004593 trail
-          widthMinPixels: 2,
-          trailLength: TRAIL,
-          currentTime: time,
-          shadowEnabled: false,
+        // Static arc trails — always visible
+        new deck.ArcLayer({
+          id: 'arcs-trail',
+          data: allData,
+          getSourcePosition: d => [d.originLng, d.originLat],
+          getTargetPosition: d => [d.destLng, d.destLat],
+          getSourceColor: [0, 69, 147, 180],
+          getTargetColor: [0, 69, 147, 180],
+          getWidth: d => Math.max(1, (d.shipments / maxS) * 5),
+          getHeight: 0.4,
+          pickable: true,
+          onHover: ({ object, x, y }) => {
+            if (object) {
+              tip.style.display = 'block';
+              tip.style.left = (x+14)+'px'; tip.style.top = (y+14)+'px';
+              tip.innerHTML = `<strong>${object.originCity} → ${object.destCity}</strong><br>
+                Spend: ${fmtMoney(object.spend)}<br>
+                Shipments: ${object.shipments.toLocaleString()}`;
+            } else tip.style.display = 'none';
+          },
         }),
-        new deck.TripsLayer({
-          id: 'trips-dot',
-          data: trips,
-          getPath: d => d.path,
-          getTimestamps: d => d.timestamps.map(t => (t + d.offset) % LOOP),
-          getColor: [255, 187, 27],     // #FFBB1B dot
-          widthMinPixels: 6,
-          trailLength: 80,              // short trail = tight glowing dot
-          currentTime: time,
-          shadowEnabled: false,
+        // Animated dots along the arcs using ScatterplotLayer
+        new deck.ScatterplotLayer({
+          id: 'dots',
+          data: allData.map((d, i) => {
+            const t = ((time + (i / allData.length) * LOOP) % LOOP) / LOOP;
+            // Quadratic bezier along the arc path
+            const mx = (d.originLng + d.destLng) / 2;
+            const my = (d.originLat + d.destLat) / 2 + Math.abs(d.destLat - d.originLat) * 0.4 + 2;
+            const x = (1-t)*(1-t)*d.originLng + 2*(1-t)*t*mx + t*t*d.destLng;
+            const y = (1-t)*(1-t)*d.originLat + 2*(1-t)*t*my + t*t*d.destLat;
+            return { position: [x, y], size: Math.max(3, (d.shipments / maxS) * 8) };
+          }),
+          getPosition: d => d.position,
+          getRadius: d => d.size,
+          radiusUnits: 'pixels',
+          getFillColor: [255, 187, 27, 240],
+          pickable: false,
         }),
       ]
     });
