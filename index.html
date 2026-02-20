@@ -23,7 +23,17 @@
     #status.ok  { border-color: #1a7a4a33; color: #1a7a4a; }
     #status.err { border-color: #b0002033; color: #b00020; }
 
-    #tooltip {
+    #ui-controls {
+      position: absolute; bottom: 20px; right: 16px;
+      display: flex; gap: 8px;
+    }
+    #ui-controls button {
+      background: rgba(255,255,255,0.93); border: 1px solid rgba(0,0,0,0.12);
+      border-radius: 8px; padding: 7px 14px; font-size: 12px; font-weight: 600;
+      cursor: pointer; color: #333; box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+    }
+    #ui-controls button:hover { background: #fff; border-color: #004593; color: #004593; }
+    #pin-btn.active { background: #004593; color: #fff; border-color: #004593; }
       display: none; position: fixed; z-index: 999;
       background: rgba(255,255,255,0.98); border: 1px solid rgba(0,0,0,0.1);
       border-radius: 8px; padding: 8px 13px; font-size: 12px; color: #333;
@@ -38,6 +48,10 @@
 <body>
 
 <div id="map"></div>
+<div id="ui-controls">
+  <button id="pin-btn">📍 Pin View</button>
+  <button id="restart-btn">↺ Restart</button>
+</div>
 <div id="tooltip"></div>
 <div id="status">⏳ Initializing…</div>
 
@@ -208,7 +222,22 @@ function loadSampleData() {
   buildTimeline();
 }
 
-// ─── Timeline ─────────────────────────────────────────────────────────────────
+let pinned = false;
+
+// ─── UI Controls ──────────────────────────────────────────────────────────────
+document.getElementById('pin-btn').addEventListener('click', () => {
+  pinned = !pinned;
+  map.dragPan[pinned ? 'disable' : 'enable']();
+  map.scrollZoom[pinned ? 'disable' : 'enable']();
+  map.doubleClickZoom[pinned ? 'disable' : 'enable']();
+  map.touchZoomRotate[pinned ? 'disable' : 'enable']();
+  document.getElementById('pin-btn').classList.toggle('active', pinned);
+  document.getElementById('pin-btn').textContent = pinned ? '📍 Pinned' : '📍 Pin View';
+});
+
+document.getElementById('restart-btn').addEventListener('click', () => {
+  renderArcs();
+});
 function buildTimeline() {
   if (mapReady) renderArcs();
 }
