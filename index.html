@@ -197,11 +197,12 @@ function subscribe(elementId, cfg) {
   fetching = false;
 
   const onData = (payload) => {
-    fetching = false;
-    // One-time raw dump so we can see the real shape
-    console.log('[ArcMap] raw payload:', JSON.stringify(payload).slice(0, 2000));
-    const rows = payload?.rows ?? payload?.data ?? payload?.columns ?? {};
-    const hasMore = !!payload?.hasMore;
+    if (!payload || Object.keys(payload).length === 0) {
+      setStatus('⚠ Empty payload from Sigma.', 'err');
+      return;
+    }
+    setStatus('✓ Data received', 'ok');
+    ingestData(cfg, payload);
 
     // Accumulate columnar arrays keyed by columnId
     for (const [k, vals] of Object.entries(rows)) {
@@ -393,4 +394,3 @@ function fmtMoney(n) {
 </script>
 </body>
 </html>
-
