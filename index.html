@@ -8,7 +8,7 @@
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { background: #1a1a2e; font-family: 'Inter', sans-serif; overflow: hidden; }
     #map { position: absolute; inset: 0; }
-    #deck-canvas { position: absolute; inset: 0; pointer-events: none; }
+    #deck-canvas { position: absolute; inset: 0; pointer-events: none; background: transparent; }
 
     #controls {
       position: absolute; bottom: 24px; left: 50%; transform: translateX(-50%);
@@ -107,15 +107,24 @@ map.on('load', () => {
   const canvas = document.getElementById('deck-canvas');
   canvas.width  = window.innerWidth;
   canvas.height = window.innerHeight;
-  deckgl = new deck.DeckGL({
+
+  deckgl = new deck.Deck({
     canvas,
-    mapStyle: null,
-    width: window.innerWidth, height: window.innerHeight,
+    width: window.innerWidth,
+    height: window.innerHeight,
     viewState: getVS(),
     controller: false,
     layers: [],
+    _customRender: () => deckgl.redraw('custom'),
   });
-  map.on('move', () => deckgl.setProps({ viewState: getVS() }));
+
+  map.on('move',   () => deckgl.setProps({ viewState: getVS() }));
+  map.on('resize', () => {
+    const w = window.innerWidth, h = window.innerHeight;
+    canvas.width = w; canvas.height = h;
+    deckgl.setProps({ width: w, height: h, viewState: getVS() });
+  });
+
   mapReady = true;
   if (allData.length) renderArcs();
 });
