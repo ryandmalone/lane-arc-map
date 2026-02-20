@@ -230,10 +230,7 @@ function subscribe(elementId, cfg) {
     elementUnsub = typeof unsub === 'function' ? unsub
                  : typeof unsub?.unsubscribe === 'function' ? unsub.unsubscribe.bind(unsub)
                  : () => {};
-    // Delay fetchMore slightly so the subscription is fully registered
-    // before we request data — calling it immediately causes a 409
-    setTimeout(() => el.fetchMoreElementData(elementId), 300);
-    setStatus('✓ Subscribed — loading data…');
+    setStatus('✓ Subscribed — waiting for data…');
   } catch(e) {
     setStatus(`❌ Subscribe failed:\n${e.message}`, 'err');
   }
