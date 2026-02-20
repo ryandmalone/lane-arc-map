@@ -13,27 +13,12 @@
     #controls {
       position: absolute; bottom: 24px; left: 50%; transform: translateX(-50%);
       background: rgba(255,255,255,0.93); border: 1px solid rgba(0,0,0,0.08);
-      border-radius: 12px; padding: 12px 20px; display: flex;
-      align-items: center; gap: 16px; min-width: 440px;
+      border-radius: 12px; padding: 10px 18px; display: flex;
+      align-items: center; gap: 16px;
       box-shadow: 0 4px 24px rgba(0,0,0,0.18);
     }
-    #play-btn {
-      width: 36px; height: 36px; border-radius: 50%; border: none;
-      background: #1a3a6e; color: #fff; font-size: 15px; cursor: pointer;
-      display: flex; align-items: center; justify-content: center; flex-shrink: 0;
-    }
-    #play-btn:hover { background: #2e6db4; }
-    #scrubber-wrap { flex: 1; display: flex; flex-direction: column; gap: 5px; }
-    #month-label { font-size: 11px; color: #555; text-align: center; letter-spacing: 0.06em; font-weight: 500; }
-    #scrubber {
-      -webkit-appearance: none; width: 100%; height: 4px;
-      border-radius: 2px; background: rgba(0,0,0,0.12); outline: none; cursor: pointer;
-    }
-    #scrubber::-webkit-slider-thumb {
-      -webkit-appearance: none; width: 14px; height: 14px;
-      border-radius: 50%; background: #1a3a6e; cursor: pointer;
-    }
-    #stats { font-size: 11px; color: #888; text-align: right; flex-shrink: 0; line-height: 1.7; }
+    #month-label { font-size: 13px; color: #333; font-weight: 600; letter-spacing: 0.06em; }
+    #stats { font-size: 11px; color: #888; line-height: 1.7; }
     #stats span { color: #222; font-weight: 600; }
 
     #legend {
@@ -88,15 +73,8 @@
 </div>
 
 <div id="controls">
-  <button id="play-btn">▶</button>
-  <div id="scrubber-wrap">
-    <div id="month-label">—</div>
-    <input type="range" id="scrubber" min="0" value="0" />
-  </div>
-  <div id="stats">
-    Lanes: <span id="stat-lanes">—</span><br>
-    Spend: <span id="stat-spend">—</span>
-  </div>
+  <div id="month-label">—</div>
+  <div id="stats">Lanes: <span id="stat-lanes">—</span> &nbsp; Spend: <span id="stat-spend">—</span></div>
 </div>
 
 <script type="module">
@@ -201,8 +179,11 @@ function subscribe(elementId, cfg) {
       setStatus('⚠ Empty payload from Sigma.', 'err');
       return;
     }
+    // payload is WorkbookElementData: { [colId]: any[] }
+    // Clone it into a plain object to avoid any Proxy/getter issues
+    const rows = Object.fromEntries(Object.entries(payload));
     setStatus('✓ Data received', 'ok');
-    ingestData(cfg, payload);
+    ingestData(cfg, rows);
 
     // Accumulate columnar arrays keyed by columnId
     for (const [k, vals] of Object.entries(rows)) {
@@ -299,9 +280,13 @@ function loadSampleData() {
 // ─── Timeline ─────────────────────────────────────────────────────────────────
 function buildTimeline() {
   months = [...new Set(allData.map(r => r.month))].filter(Boolean).sort();
-  const s = document.getElementById('scrubber');
-  s.max = Math.max(0, months.length - 1);
-  s.value = monthIdx = 0;
+  monthIdx = 0;
+  if (playTimer) clearInterval(playTimer);
+  // Auto-loop forever
+  playTimer = setInterval(() => {
+    monthIdx = (monthIdx + 1) % months.length;
+    renderArcs();
+  }, 1200);
   if (mapReady) renderArcs();
 }
 
@@ -319,61 +304,60 @@ function spendColor(v, lo, hi) {
 // ─── Render ───────────────────────────────────────────────────────────────────
 function renderArcs() {
   if (!deckgl || !months.length) return;
-  const m    = months[monthIdx];
-  const data = allData.filter(r => r.month === m);
-  const spends = data.map(r => r.spend);
+  const m = months[monthIdx];
+
+  // Show ALL lanes but highlight current month, dim others
+  const spends = allData.map(r => r.spend);
   const lo = Math.min(...spends), hi = Math.max(...spends);
-  const maxS = Math.max(...data.map(r => r.shipments), 1);
+  const maxS = Math.max(...allData.map(r => r.shipments), 1);
+
+  const activeData = allData.filter(r => r.month === m);
+  const spend = activeData.reduce((a, r) => a + r.spend, 0);
 
   document.getElementById('month-label').textContent = fmtMonth(m);
   document.getElementById('scrubber').value = monthIdx;
-  document.getElementById('stat-lanes').textContent = data.length.toLocaleString();
-  document.getElementById('stat-spend').textContent = fmtMoney(data.reduce((a, r) => a + r.spend, 0));
+  document.getElementById('stat-lanes').textContent = activeData.length.toLocaleString();
+  document.getElementById('stat-spend').textContent = fmtMoney(spend);
 
   const tip = document.getElementById('tooltip');
   deckgl.setProps({
     viewState: { ...getVS(), transitionDuration: 0 },
-    layers: [new deck.ArcLayer({
-      id: 'arcs', data,
-      getSourcePosition: d => [d.originLng, d.originLat],
-      getTargetPosition: d => [d.destLng,   d.destLat],
-      getSourceColor: d => spendColor(d.spend, lo, hi),
-      getTargetColor: d => spendColor(d.spend, lo, hi),
-      getWidth: d => Math.max(1, (d.shipments / maxS) * 7),
-      getHeight: 0.35, pickable: true,
-      onHover: ({ object, x, y }) => {
-        if (object) {
-          tip.style.display = 'block';
-          tip.style.left = (x+14)+'px'; tip.style.top = (y+14)+'px';
-          tip.innerHTML = `<strong>${object.originCity} → ${object.destCity}</strong><br>
-            Spend: ${fmtMoney(object.spend)}<br>
-            Shipments: ${object.shipments.toLocaleString()}`;
-        } else tip.style.display = 'none';
-      },
-    })]
+    layers: [
+      // Dimmed background — all lanes
+      new deck.ArcLayer({
+        id: 'arcs-bg', data: allData,
+        getSourcePosition: d => [d.originLng, d.originLat],
+        getTargetPosition: d => [d.destLng,   d.destLat],
+        getSourceColor: d => [...spendColor(d.spend, lo, hi).slice(0,3), 30],
+        getTargetColor: d => [...spendColor(d.spend, lo, hi).slice(0,3), 30],
+        getWidth: d => Math.max(0.5, (d.shipments / maxS) * 4),
+        getHeight: 0.35, pickable: false,
+      }),
+      // Bright foreground — current month only
+      new deck.ArcLayer({
+        id: 'arcs-fg', data: activeData,
+        getSourcePosition: d => [d.originLng, d.originLat],
+        getTargetPosition: d => [d.destLng,   d.destLat],
+        getSourceColor: d => spendColor(d.spend, lo, hi),
+        getTargetColor: d => spendColor(d.spend, lo, hi),
+        getWidth: d => Math.max(1, (d.shipments / maxS) * 7),
+        getHeight: 0.35, pickable: true,
+        transitions: { getSourceColor: 300, getTargetColor: 300, getWidth: 300 },
+        onHover: ({ object, x, y }) => {
+          if (object) {
+            tip.style.display = 'block';
+            tip.style.left = (x+14)+'px'; tip.style.top = (y+14)+'px';
+            tip.innerHTML = `<strong>${object.originCity} → ${object.destCity}</strong><br>
+              Spend: ${fmtMoney(object.spend)}<br>
+              Shipments: ${object.shipments.toLocaleString()}`;
+          } else tip.style.display = 'none';
+        },
+      }),
+    ]
   });
 }
 
-// ─── Playback ─────────────────────────────────────────────────────────────────
-document.getElementById('play-btn').addEventListener('click', () => {
-  playing = !playing;
-  document.getElementById('play-btn').textContent = playing ? '⏸' : '▶';
-  if (playing) {
-    playTimer = setInterval(() => {
-      monthIdx = (monthIdx + 1) % months.length;
-      renderArcs();
-      if (monthIdx === months.length - 1) {
-        playing = false;
-        document.getElementById('play-btn').textContent = '▶';
-        clearInterval(playTimer);
-      }
-    }, 900);
-  } else clearInterval(playTimer);
-});
 
-document.getElementById('scrubber').addEventListener('input', e => {
-  monthIdx = +e.target.value; renderArcs();
-});
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 function fmtMonthKey(v) {
