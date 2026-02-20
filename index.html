@@ -228,7 +228,7 @@ function buildTimeline() {
 
 // ─── Render ───────────────────────────────────────────────────────────────────
 const LOOP = 2000; // ms for one full pulse cycle
-const TRAIL = 400; // ms trail length
+const TRAIL = 1800; // nearly full trail length = always visible
 
 function renderArcs() {
   if (!overlay || !allData.length) return;
@@ -259,13 +259,24 @@ function renderArcs() {
     overlay.setProps({
       layers: [
         new deck.TripsLayer({
-          id: 'trips',
+          id: 'trips-trail',
           data: trips,
           getPath: d => d.path,
           getTimestamps: d => d.timestamps.map(t => (t + d.offset) % LOOP),
-          getColor: [99, 149, 255],
+          getColor: [0, 69, 147],       // #004593 trail
           widthMinPixels: 2,
           trailLength: TRAIL,
+          currentTime: time,
+          shadowEnabled: false,
+        }),
+        new deck.TripsLayer({
+          id: 'trips-dot',
+          data: trips,
+          getPath: d => d.path,
+          getTimestamps: d => d.timestamps.map(t => (t + d.offset) % LOOP),
+          getColor: [255, 187, 27],     // #FFBB1B dot
+          widthMinPixels: 6,
+          trailLength: 80,              // short trail = tight glowing dot
           currentTime: time,
           shadowEnabled: false,
         }),
