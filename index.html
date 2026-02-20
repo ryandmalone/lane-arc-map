@@ -97,25 +97,24 @@ let fetching = false; // guard against duplicate fetchMore calls
 // ─── MapLibre + deck.gl ───────────────────────────────────────────────────────
 const map = new maplibregl.Map({
   container: 'map',
-  style: 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',
+  style: 'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json',
   center: [-96, 38], zoom: 3.8, pitch: 30,
+  transformRequest: (url) => ({ url }),
 });
 
 map.on('load', () => {
   const canvas = document.getElementById('deck-canvas');
   canvas.width  = window.innerWidth;
   canvas.height = window.innerHeight;
-  // Use map's existing GL context so deck.gl doesn't spin up its own
-  // internal map (which tries to load a mapbox:// style and errors out)
-  deckgl = new deck.Deck({
+  deckgl = new deck.DeckGL({
     canvas,
     width: window.innerWidth, height: window.innerHeight,
-    initialViewState: getVS(),
+    viewState: getVS(),
     controller: false,
     layers: [],
     onWebGLInitialized: (gl) => { gl.enable(gl.BLEND); },
   });
-  map.on('move', () => deckgl?.setProps({ viewState: getVS() }));
+  map.on('move', () => deckgl.setProps({ viewState: getVS() }));
   mapReady = true;
   if (allData.length) renderArcs();
 });
