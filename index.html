@@ -9,16 +9,7 @@
     body { font-family: 'Inter', sans-serif; overflow: hidden; }
     #map { position: absolute; inset: 0; }
 
-    #controls {
-      position: absolute; bottom: 24px; left: 50%; transform: translateX(-50%);
-      background: rgba(255,255,255,0.93); border: 1px solid rgba(0,0,0,0.08);
-      border-radius: 12px; padding: 10px 18px; display: flex;
-      align-items: center; gap: 16px;
-      box-shadow: 0 4px 24px rgba(0,0,0,0.18); white-space: nowrap;
-    }
-    #month-label { font-size: 13px; color: #333; font-weight: 600; letter-spacing: 0.06em; }
-    #stats { font-size: 11px; color: #888; line-height: 1.7; }
-    #stats span { color: #222; font-weight: 600; }
+
 
     
 
@@ -52,10 +43,7 @@
 
 
 
-<div id="controls">
-  <div id="month-label">—</div>
-  <div id="stats">Lanes: <span id="stat-lanes">—</span> &nbsp; Spend: <span id="stat-spend">—</span></div>
-</div>
+
 
 <script type="module">
 const statusEl = document.getElementById('status');
@@ -231,65 +219,32 @@ function renderArcs() {
   if (playTimer) cancelAnimationFrame(playTimer);
 
   const maxS = Math.max(...allData.map(r => r.shipments), 1);
-
-  document.getElementById('month-label').textContent = '';
-  document.getElementById('stat-lanes').textContent = allData.length.toLocaleString();
-  document.getElementById('stat-spend').textContent = fmtMoney(allData.reduce((a, r) => a + r.spend, 0));
-
   const tip = document.getElementById('tooltip');
-  let time = 0;
 
-  function frame() {
-    time = (time + 16) % LOOP;
-
-    overlay.setProps({
-      layers: [
-        // Static arc trails — always visible
-        new deck.ArcLayer({
-          id: 'arcs-trail',
-          data: allData,
-          getSourcePosition: d => [d.originLng, d.originLat],
-          getTargetPosition: d => [d.destLng, d.destLat],
-          getSourceColor: [0, 69, 147, 180],
-          getTargetColor: [0, 69, 147, 180],
-          getWidth: d => Math.max(1, (d.shipments / maxS) * 5),
-          getHeight: 0.4,
-          pickable: true,
-          onHover: ({ object, x, y }) => {
-            if (object) {
-              tip.style.display = 'block';
-              tip.style.left = (x+14)+'px'; tip.style.top = (y+14)+'px';
-              tip.innerHTML = `<strong>${object.originCity} → ${object.destCity}</strong><br>
-                Spend: ${fmtMoney(object.spend)}<br>
-                Shipments: ${object.shipments.toLocaleString()}`;
-            } else tip.style.display = 'none';
-          },
-        }),
-        // Animated dots along the arcs using ScatterplotLayer
-        new deck.ScatterplotLayer({
-          id: 'dots',
-          data: allData.map((d, i) => {
-            const t = ((time + (i / allData.length) * LOOP) % LOOP) / LOOP;
-            // Quadratic bezier along the arc path
-            const mx = (d.originLng + d.destLng) / 2;
-            const my = (d.originLat + d.destLat) / 2 + Math.abs(d.destLat - d.originLat) * 0.4 + 2;
-            const x = (1-t)*(1-t)*d.originLng + 2*(1-t)*t*mx + t*t*d.destLng;
-            const y = (1-t)*(1-t)*d.originLat + 2*(1-t)*t*my + t*t*d.destLat;
-            return { position: [x, y], size: Math.max(3, (d.shipments / maxS) * 8) };
-          }),
-          getPosition: d => d.position,
-          getRadius: d => d.size,
-          radiusUnits: 'pixels',
-          getFillColor: [255, 187, 27, 240],
-          pickable: false,
-        }),
-      ]
-    });
-
-    playTimer = requestAnimationFrame(frame);
-  }
-
-  playTimer = requestAnimationFrame(frame);
+  overlay.setProps({
+    layers: [
+      new deck.ArcLayer({
+        id: 'arcs',
+        data: allData,
+        getSourcePosition: d => [d.originLng, d.originLat],
+        getTargetPosition: d => [d.destLng, d.destLat],
+        getSourceColor: [0, 69, 147, 200],
+        getTargetColor: [0, 69, 147, 200],
+        getWidth: d => Math.max(1, (d.shipments / maxS) * 5),
+        getHeight: 0.4,
+        pickable: true,
+        onHover: ({ object, x, y }) => {
+          if (object) {
+            tip.style.display = 'block';
+            tip.style.left = (x+14)+'px'; tip.style.top = (y+14)+'px';
+            tip.innerHTML = `<strong>${object.originCity} → ${object.destCity}</strong><br>
+              Spend: ${fmtMoney(object.spend)}<br>
+              Shipments: ${object.shipments.toLocaleString()}`;
+          } else tip.style.display = 'none';
+        },
+      }),
+    ]
+  });
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
