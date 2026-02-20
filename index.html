@@ -6,16 +6,15 @@
   <title>Lane Arc Map</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { background: #1a1a2e; font-family: 'Inter', sans-serif; overflow: hidden; }
+    body { font-family: 'Inter', sans-serif; overflow: hidden; }
     #map { position: absolute; inset: 0; }
-    #deck-canvas { position: absolute; inset: 0; pointer-events: none; background: transparent; }
 
     #controls {
       position: absolute; bottom: 24px; left: 50%; transform: translateX(-50%);
       background: rgba(255,255,255,0.93); border: 1px solid rgba(0,0,0,0.08);
       border-radius: 12px; padding: 10px 18px; display: flex;
       align-items: center; gap: 16px;
-      box-shadow: 0 4px 24px rgba(0,0,0,0.18);
+      box-shadow: 0 4px 24px rgba(0,0,0,0.18); white-space: nowrap;
     }
     #month-label { font-size: 13px; color: #333; font-weight: 600; letter-spacing: 0.06em; }
     #stats { font-size: 11px; color: #888; line-height: 1.7; }
@@ -56,8 +55,6 @@
 <body>
 
 <div id="map"></div>
-<canvas id="deck-canvas"></canvas>
-<canvas id="deck-canvas"></canvas>
 <div id="tooltip"></div>
 <div id="status">⏳ Initializing…</div>
 
@@ -82,67 +79,36 @@
 const statusEl = document.getElementById('status');
 const setStatus = (msg, cls = '') => { statusEl.textContent = msg; statusEl.className = cls; };
 
-// ─── Wait for deferred scripts ────────────────────────────────────────────────
+// Wait for deferred scripts
 await new Promise(resolve => {
   if (typeof maplibregl !== 'undefined' && typeof deck !== 'undefined') return resolve();
   window.addEventListener('load', resolve, { once: true });
 });
 
 // ─── State ────────────────────────────────────────────────────────────────────
-let allData = [], months = [], monthIdx = 0;
-let playing = false, playTimer = null;
-let deckgl = null, mapReady = false;
+let allData = [], months = [], monthIdx = 0, playTimer = null;
+let overlay = null, mapReady = false;
 let elementUnsub = null;
-let fetching = false; // guard against duplicate fetchMore calls
 
-// ─── MapLibre + deck.gl ───────────────────────────────────────────────────────
+// ─── MapLibre ─────────────────────────────────────────────────────────────────
 const map = new maplibregl.Map({
   container: 'map',
   style: 'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json',
   center: [-96, 38], zoom: 3.8, pitch: 30,
-  transformRequest: (url) => ({ url }),
 });
 
 map.on('load', () => {
-  const canvas = document.getElementById('deck-canvas');
-  canvas.width  = window.innerWidth;
-  canvas.height = window.innerHeight;
-
-  deckgl = new deck.Deck({
-    canvas,
-    width: window.innerWidth,
-    height: window.innerHeight,
-    viewState: getVS(),
-    controller: false,
+  // Use MapboxOverlay — the official deck.gl/MapLibre integration
+  // It attaches deck.gl as a MapLibre custom layer, sharing the GL context
+  // so there's only ONE canvas and NO dark overlay
+  overlay = new deck.MapboxOverlay({
+    interleaved: false,
     layers: [],
-    _customRender: () => deckgl.redraw('custom'),
   });
-
-  map.on('move',   () => { deckgl.setProps({ viewState: getVS() }); deckgl.redraw('move'); });
-  map.on('render', () => deckgl.redraw('map-render'));
-  map.on('resize', () => {
-    const w = window.innerWidth, h = window.innerHeight;
-    canvas.width = w; canvas.height = h;
-    deckgl.setProps({ width: w, height: h, viewState: getVS() });
-  });
-
+  map.addControl(overlay);
   mapReady = true;
   if (allData.length) renderArcs();
-  setTimeout(() => deckgl.redraw('init'), 100);
 });
-
-window.addEventListener('resize', () => {
-  const w = window.innerWidth, h = window.innerHeight;
-  const c = document.getElementById('deck-canvas');
-  c.width = w; c.height = h;
-  deckgl?.setProps({ width: w, height: h });
-});
-
-function getVS() {
-  const c = map.getCenter();
-  return { longitude: c.lng, latitude: c.lat, zoom: map.getZoom(),
-           pitch: map.getPitch(), bearing: map.getBearing() };
-}
 
 // ─── Sigma Plugin ─────────────────────────────────────────────────────────────
 let sigmaClient = null;
@@ -181,41 +147,22 @@ try {
 // ─── Subscribe ────────────────────────────────────────────────────────────────
 function subscribe(elementId, cfg) {
   const el = sigmaClient.elements;
-  const accRows = {};
   let retried = false;
-  fetching = false;
 
   const onData = (payload) => {
     if (!payload || Object.keys(payload).length === 0) {
-      setStatus('⚠ Empty payload from Sigma.', 'err');
+      if (!retried) {
+        retried = true;
+        setStatus('⏳ Waiting for data…');
+        setTimeout(() => el.fetchMoreElementData(elementId), 500);
+      } else {
+        setStatus('⚠ No data returned from Sigma.', 'err');
+      }
       return;
     }
-    // payload is WorkbookElementData: { [colId]: any[] }
-    // Clone it into a plain object to avoid any Proxy/getter issues
     const rows = Object.fromEntries(Object.entries(payload));
     setStatus('✓ Data received', 'ok');
     ingestData(cfg, rows);
-
-    // Accumulate columnar arrays keyed by columnId
-    for (const [k, vals] of Object.entries(rows)) {
-      if (!accRows[k]) accRows[k] = [];
-      if (Array.isArray(vals)) accRows[k].push(...vals);
-    }
-
-    const rowCount = Object.values(accRows)[0]?.length ?? 0;
-
-    if (hasMore && rowCount > 0) {
-      fetching = true;
-      setStatus(`⏳ Loading… (${rowCount} rows)`);
-      el.fetchMoreElementData(elementId);
-    } else {
-      // Done — remap from columnId keys to what ingestData expects
-      // cfg[slotName] = columnId, accRows[columnId] = values[]
-      // ingestData resolves cfg[slotName] → columnId → accRows[columnId]
-      // so accRows is already in the right shape — just pass it as `rows`
-      setStatus('✓ Data received', 'ok');
-      ingestData(cfg, accRows);
-    }
   };
 
   try {
@@ -233,10 +180,13 @@ function subscribe(elementId, cfg) {
 function ingestData(cfg, rows) {
   const colId = name => cfg[name];
   const latColId = colId('origin_lat');
-  console.log('[ArcMap] ingestData latColId:', latColId, 'rowKeys:', Object.keys(rows).slice(0,5));
 
   if (!latColId || !rows[latColId]?.length) {
-    setStatus(`⚠ No data.\nExpected colId: ${latColId}\nGot keys: ${Object.keys(rows).slice(0,4).join(', ')}`, 'err');
+    const remapped = Object.fromEntries(
+      Object.keys(cfg).filter(k => rows[k]).map(k => [cfg[k], rows[k]])
+    );
+    if (Object.keys(remapped).length) return ingestData(cfg, remapped);
+    setStatus(`⚠ No data.\nExpected: ${latColId}\nGot: ${Object.keys(rows).slice(0,4).join(', ')}`, 'err');
     return;
   }
 
@@ -249,13 +199,13 @@ function ingestData(cfg, rows) {
     const dLng = parseFloat(rows[colId('dest_lng')]?.[i]);
     if (!isFinite(oLat) || !isFinite(dLat) || !oLat || !dLat) continue;
     allData.push({
-      originCity: String(rows[colId('origin_city')]?.[i]    ?? ''),
-      destCity:   String(rows[colId('dest_city')]?.[i]      ?? ''),
+      originCity: String(rows[colId('origin_city')]?.[i] ?? ''),
+      destCity:   String(rows[colId('dest_city')]?.[i]   ?? ''),
       originLat: oLat, originLng: oLng,
       destLat:   dLat, destLng:   dLng,
       spend:     parseFloat(rows[colId('total_spend')]?.[i])    || 0,
       shipments: parseInt(rows[colId('shipment_count')]?.[i])   || 0,
-      month: fmtMonthKey(rows[colId('month')]?.[i]),
+      month:     fmtMonthKey(rows[colId('month')]?.[i]),
     });
   }
 
@@ -293,7 +243,6 @@ function buildTimeline() {
   months = [...new Set(allData.map(r => r.month))].filter(Boolean).sort();
   monthIdx = 0;
   if (playTimer) clearInterval(playTimer);
-  // Auto-loop forever
   playTimer = setInterval(() => {
     monthIdx = (monthIdx + 1) % months.length;
     renderArcs();
@@ -302,56 +251,51 @@ function buildTimeline() {
 }
 
 // ─── Color ────────────────────────────────────────────────────────────────────
-function spendColor(v, lo, hi) {
+function spendColor(v, lo, hi, alpha = 210) {
   const t = hi > lo ? Math.pow((v - lo) / (hi - lo), 0.4) : 0;
   if (t < 0.5) {
     const s = t * 2;
-    return [Math.round(s*255), Math.round(196+s*(187-196)), Math.round(159+s*(40-159)), 210];
+    return [Math.round(s*255), Math.round(196+s*(187-196)), Math.round(159+s*(40-159)), alpha];
   }
   const s = (t - 0.5) * 2;
-  return [255, Math.round(187+s*(77-187)), Math.round(40+s*(77-40)), 210];
+  return [255, Math.round(187+s*(77-187)), Math.round(40+s*(77-40)), alpha];
 }
 
 // ─── Render ───────────────────────────────────────────────────────────────────
 function renderArcs() {
-  if (!deckgl || !months.length) return;
+  if (!overlay || !months.length) return;
   const m = months[monthIdx];
-
-  // Show ALL lanes but highlight current month, dim others
+  const activeData = allData.filter(r => r.month === m);
   const spends = allData.map(r => r.spend);
   const lo = Math.min(...spends), hi = Math.max(...spends);
   const maxS = Math.max(...allData.map(r => r.shipments), 1);
 
-  const activeData = allData.filter(r => r.month === m);
-  const spend = activeData.reduce((a, r) => a + r.spend, 0);
-
   document.getElementById('month-label').textContent = fmtMonth(m);
-  document.getElementById('scrubber').value = monthIdx;
   document.getElementById('stat-lanes').textContent = activeData.length.toLocaleString();
-  document.getElementById('stat-spend').textContent = fmtMoney(spend);
+  document.getElementById('stat-spend').textContent = fmtMoney(activeData.reduce((a, r) => a + r.spend, 0));
 
   const tip = document.getElementById('tooltip');
-  deckgl.setProps({
-    viewState: { ...getVS(), transitionDuration: 0 },
+
+  overlay.setProps({
     layers: [
       new deck.ArcLayer({
         id: 'arcs-bg', data: allData,
         getSourcePosition: d => [d.originLng, d.originLat],
-        getTargetPosition: d => [d.destLng,   d.destLat],
-        getSourceColor: d => [...spendColor(d.spend, lo, hi).slice(0,3), 30],
-        getTargetColor: d => [...spendColor(d.spend, lo, hi).slice(0,3), 30],
+        getTargetPosition: d => [d.destLng, d.destLat],
+        getSourceColor: d => spendColor(d.spend, lo, hi, 25),
+        getTargetColor: d => spendColor(d.spend, lo, hi, 25),
         getWidth: d => Math.max(0.5, (d.shipments / maxS) * 4),
         getHeight: 0.35, pickable: false,
       }),
       new deck.ArcLayer({
         id: 'arcs-fg', data: activeData,
         getSourcePosition: d => [d.originLng, d.originLat],
-        getTargetPosition: d => [d.destLng,   d.destLat],
+        getTargetPosition: d => [d.destLng, d.destLat],
         getSourceColor: d => spendColor(d.spend, lo, hi),
         getTargetColor: d => spendColor(d.spend, lo, hi),
         getWidth: d => Math.max(1, (d.shipments / maxS) * 7),
         getHeight: 0.35, pickable: true,
-        transitions: { getSourceColor: 300, getTargetColor: 300, getWidth: 300 },
+        transitions: { getSourceColor: 400, getTargetColor: 400, getWidth: 400 },
         onHover: ({ object, x, y }) => {
           if (object) {
             tip.style.display = 'block';
@@ -366,15 +310,12 @@ function renderArcs() {
   });
 }
 
-
-
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 function fmtMonthKey(v) {
   if (!v) return '';
-  // Handle Unix ms timestamps (e.g. 1764547200000) or date strings
   const d = new Date(typeof v === 'number' ? v : Date.parse(v));
   if (isNaN(d)) return String(v);
-  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,'0')}`;
 }
 function fmtMonth(m) {
   if (!m) return '—';
