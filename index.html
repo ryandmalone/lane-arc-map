@@ -61,13 +61,14 @@ let allData = [], rafId = null, overlay = null, mapReady = false, elementUnsub =
 
 const DRAW_DURATION = 1200;
 const DRAW_STAGGER  = 80;
-const DOT_PERIOD    = 2200; // ms per full lap
+const DOT_PERIOD    = 2200;
+const N_SEG         = 80; // great-circle segments per path
 
 // ─── MapLibre ─────────────────────────────────────────────────────────────────
 const map = new maplibregl.Map({
   container: 'map',
   style: 'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json',
-  center: [-96, 38], zoom: 3.8, pitch: 30,
+  center: [-96, 38], zoom: 3.8, pitch: 0,
 });
 
 map.on('load', () => {
@@ -206,26 +207,33 @@ function fitAndRender() {
     minLat = Math.min(minLat, d.originLat, d.destLat);
     maxLat = Math.max(maxLat, d.originLat, d.destLat);
   }
-  map.fitBounds([[minLng, minLat],[maxLng, maxLat]], { padding: 60, pitch: 30, duration: 800 });
-  // Start rendering after fit animation
+  map.fitBounds([[minLng, minLat],[maxLng, maxLat]], { padding: 80, pitch: 0, duration: 800 });
   setTimeout(renderArcs, 900);
 }
 
-// ─── Great-circle interpolation ───────────────────────────────────────────────
+// ─── Great-circle point ───────────────────────────────────────────────────────
 function gcPoint(oLat, oLng, dLat, dLng, t) {
   const toR = d => d * Math.PI / 180;
   const toD = r => r * 180 / Math.PI;
-  const la1 = toR(oLat), lo1 = toR(oLng), la2 = toR(dLat), lo2 = toR(dLng);
-  const ang = 2 * Math.asin(Math.sqrt(
+  const la1=toR(oLat), lo1=toR(oLng), la2=toR(dLat), lo2=toR(dLng);
+  const ang = 2*Math.asin(Math.sqrt(
     Math.sin((la2-la1)/2)**2 + Math.cos(la1)*Math.cos(la2)*Math.sin((lo2-lo1)/2)**2
   ));
-  if (ang < 1e-9) return [oLat, oLng];
-  const s = Math.sin(ang);
-  const A = Math.sin((1-t)*ang)/s, B = Math.sin(t*ang)/s;
-  const x = A*Math.cos(la1)*Math.cos(lo1) + B*Math.cos(la2)*Math.cos(lo2);
-  const y = A*Math.cos(la1)*Math.sin(lo1) + B*Math.cos(la2)*Math.sin(lo2);
-  const z = A*Math.sin(la1)               + B*Math.sin(la2);
-  return [toD(Math.atan2(z, Math.sqrt(x*x+y*y))), toD(Math.atan2(y, x))];
+  if (ang < 1e-9) return [oLng, oLat];
+  const s=Math.sin(ang), A=Math.sin((1-t)*ang)/s, B=Math.sin(t*ang)/s;
+  const x=A*Math.cos(la1)*Math.cos(lo1)+B*Math.cos(la2)*Math.cos(lo2);
+  const y=A*Math.cos(la1)*Math.sin(lo1)+B*Math.cos(la2)*Math.sin(lo2);
+  const z=A*Math.sin(la1)+B*Math.sin(la2);
+  return [toD(Math.atan2(y,x)), toD(Math.atan2(z,Math.sqrt(x*x+y*y)))]; // [lng, lat]
+}
+
+// Precompute full great-circle path as array of [lng,lat] with N_SEG+1 points
+function buildPath(d) {
+  const pts = [];
+  for (let s = 0; s <= N_SEG; s++) {
+    pts.push(gcPoint(d.originLat, d.originLng, d.destLat, d.destLng, s / N_SEG));
+  }
+  return pts;
 }
 
 // ─── Pin ──────────────────────────────────────────────────────────────────────
@@ -243,21 +251,16 @@ function renderArcs() {
   if (!overlay || !allData.length) return;
   if (rafId) cancelAnimationFrame(rafId);
 
+  const tip = document.getElementById('tooltip');
   const maxS = Math.max(...allData.map(r => r.shipments), 1);
-  const tip   = document.getElementById('tooltip');
+  const lineWidths = allData.map(d => Math.max(1.5, (d.shipments / maxS) * 5));
   const totalDrawTime = (allData.length - 1) * DRAW_STAGGER + DRAW_DURATION;
-
-  // Precompute per-arc dot offsets so they're spread out, not synchronized
   const dotOffsets = allData.map(() => Math.random());
 
-  // Arc line widths precomputed
-  const lineWidths = allData.map(d => Math.max(1.5, (d.shipments / maxS) * 5));
+  // Precompute full paths (array of [lng,lat] coords)
+  const fullPaths = allData.map(d => buildPath(d));
 
-  const startTime = performance.now();
-
-  const hoverInfo = { object: null, x: 0, y: 0 };
   const onHover = ({ object, x, y }) => {
-    hoverInfo.object = object; hoverInfo.x = x; hoverInfo.y = y;
     if (object) {
       tip.style.display = 'block';
       tip.style.left = (x+14)+'px'; tip.style.top = (y+14)+'px';
@@ -266,73 +269,77 @@ function renderArcs() {
     } else tip.style.display = 'none';
   };
 
+  const startTime = performance.now();
+
   function frame(now) {
     const elapsed = now - startTime;
     const drawing = elapsed < totalDrawTime;
 
     if (drawing) {
-      // ── Phase 1: draw arcs progressively ──
-      const arcData = [];
+      // ── Phase 1: PathLayer drawing progressively ──
+      const pathData = [];
       for (let i = 0; i < allData.length; i++) {
         const t = Math.min(1, Math.max(0, (elapsed - i * DRAW_STAGGER) / DRAW_DURATION));
         if (t <= 0) continue;
         const d = allData[i];
-        const [tipLat, tipLng] = gcPoint(d.originLat, d.originLng, d.destLat, d.destLng, t);
-        arcData.push({ ...d, tipLat, tipLng, w: lineWidths[i], alpha: Math.min(200, t * 600 | 0) });
+        // Slice the precomputed path to t fraction
+        const endIdx = Math.max(1, Math.round(t * N_SEG));
+        const path = fullPaths[i].slice(0, endIdx + 1);
+        pathData.push({ ...d, path, w: lineWidths[i], alpha: Math.min(200, (t * 600)|0) });
       }
 
       overlay.setProps({ layers: [
-        new deck.ArcLayer({
-          id: 'arcs', data: arcData,
-          getSourcePosition: d => [d.originLng, d.originLat],
-          getTargetPosition: d => [d.tipLng, d.tipLat],
-          getSourceColor: d => [0, 69, 147, d.alpha],
-          getTargetColor: d => [0, 120, 220, d.alpha],
-          getWidth: d => d.w, getHeight: 0.4,
-          updateTriggers: { getTargetPosition: elapsed, getSourceColor: elapsed, getTargetColor: elapsed },
+        new deck.PathLayer({
+          id: 'lines', data: pathData,
+          getPath: d => d.path,
+          getColor: d => [0, 69, 147, d.alpha],
+          getWidth: d => d.w,
+          widthUnits: 'pixels',
           pickable: true, onHover,
+          updateTriggers: { getPath: elapsed, getColor: elapsed },
         }),
       ]});
 
     } else {
-      // ── Phase 2: static arcs + travelling dots ──
+      // ── Phase 2: full lines + ScatterplotLayer dots on top ──
       const dotsElapsed = elapsed - totalDrawTime;
 
-      // Build one ScatterplotLayer entry per arc: position at t along the arc.
-      // We compute the screen-space position by sampling the great circle,
-      // then use a ScatterplotLayer so we get a true fixed-size circle.
-      // To make the dot appear ON the arc (elevated), we pair it as a tiny
-      // arc stub: source = t-ε, target = t, same getHeight = 0.4.
+      // Full static line data
+      const lineData = allData.map((d, i) => ({
+        ...d, path: fullPaths[i], w: lineWidths[i],
+      }));
+
+      // Dot positions — sample the precomputed path at fraction t
       const dotData = allData.map((d, i) => {
-        const t  = (dotOffsets[i] + dotsElapsed / DOT_PERIOD) % 1;
-        const t0 = Math.max(0, t - 0.015); // short trail segment
-        const [lat,  lng]  = gcPoint(d.originLat, d.originLng, d.destLat, d.destLng, t);
-        const [lat0, lng0] = gcPoint(d.originLat, d.originLng, d.destLat, d.destLng, t0);
-        return { ...d, lat, lng, lat0, lng0, w: lineWidths[i] };
+        const t = (dotOffsets[i] + dotsElapsed / DOT_PERIOD) % 1;
+        // Interpolate between path segment points for smooth motion
+        const raw = t * N_SEG;
+        const seg = Math.floor(raw);
+        const frac = raw - seg;
+        const p0 = fullPaths[i][Math.min(seg,     N_SEG)];
+        const p1 = fullPaths[i][Math.min(seg + 1, N_SEG)];
+        const lng = p0[0] + (p1[0] - p0[0]) * frac;
+        const lat = p0[1] + (p1[1] - p0[1]) * frac;
+        return { position: [lng, lat], w: lineWidths[i], originCity: d.originCity, destCity: d.destCity };
       });
 
       overlay.setProps({ layers: [
-        // Static full arcs
-        new deck.ArcLayer({
-          id: 'arcs', data: allData,
-          getSourcePosition: d => [d.originLng, d.originLat],
-          getTargetPosition: d => [d.destLng, d.destLat],
-          getSourceColor: [0, 69, 147, 200],
-          getTargetColor: [0, 120, 220, 200],
-          getWidth: d => Math.max(1.5, (d.shipments / maxS) * 5),
-          getHeight: 0.4, pickable: true, onHover,
-        }),
-        // Dots — rendered as short arc stubs so they follow the arc's elevation
-        new deck.ArcLayer({
-          id: 'dots', data: dotData,
-          getSourcePosition: d => [d.lng0, d.lat0],
-          getTargetPosition: d => [d.lng, d.lat],
-          getSourceColor: [255, 187, 27, 255],
-          getTargetColor: [255, 187, 27, 255],
+        new deck.PathLayer({
+          id: 'lines', data: lineData,
+          getPath: d => d.path,
+          getColor: [0, 69, 147, 200],
           getWidth: d => d.w,
-          getHeight: 0.4,
+          widthUnits: 'pixels',
+          pickable: true, onHover,
+        }),
+        new deck.ScatterplotLayer({
+          id: 'dots', data: dotData,
+          getPosition: d => d.position,
+          getFillColor: [255, 187, 27, 255],
+          getRadius: d => d.w,        // radius = line width → same visual size
+          radiusUnits: 'pixels',
           pickable: false,
-          updateTriggers: { getSourcePosition: dotsElapsed, getTargetPosition: dotsElapsed },
+          updateTriggers: { getPosition: dotsElapsed },
         }),
       ]});
     }
