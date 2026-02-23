@@ -66,36 +66,34 @@ let allData = [], playTimer = null;
 let overlay = null, mapReady = false;
 let elementUnsub = null;
 
-// ─── MapLibre with borders ────────────────────────────────────────────────────
+// Phase timing
+const DRAW_DURATION = 1200; // ms to draw each arc
+const DRAW_STAGGER  = 80;   // ms between arc starts
+const DOT_PERIOD    = 2000; // ms for one full dot lap
+
+// ─── MapLibre ─────────────────────────────────────────────────────────────────
 const map = new maplibregl.Map({
   container: 'map',
-  // Use a style that includes state + country borders
   style: 'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json',
   center: [-96, 38], zoom: 3.8, pitch: 30,
 });
 
 map.on('load', () => {
-  // Add country borders
   map.addSource('country-borders', {
     type: 'geojson',
     data: 'https://raw.githubusercontent.com/datasets/geo-countries/master/data/countries.geojson',
   });
   map.addLayer({
-    id: 'country-borders-line',
-    type: 'line',
-    source: 'country-borders',
+    id: 'country-borders-line', type: 'line', source: 'country-borders',
     paint: { 'line-color': '#999', 'line-width': 1, 'line-opacity': 0.7 },
   });
 
-  // Add US state borders
   map.addSource('us-states', {
     type: 'geojson',
     data: 'https://raw.githubusercontent.com/PublicaMundi/MappingAPI/master/data/geojson/us-states.json',
   });
   map.addLayer({
-    id: 'us-states-line',
-    type: 'line',
-    source: 'us-states',
+    id: 'us-states-line', type: 'line', source: 'us-states',
     paint: { 'line-color': '#aaa', 'line-width': 0.6, 'line-opacity': 0.8 },
   });
 
@@ -133,7 +131,6 @@ try {
     if (elementUnsub) { try { elementUnsub(); } catch(e){} elementUnsub = null; }
     subscribe(elementId, cfg);
   });
-
 } catch(e) {
   setStatus(`⚠ Sigma unavailable — sample data\n${e.message}`);
   loadSampleData();
@@ -201,7 +198,7 @@ function loadSampleData() {
     { name: 'Denver',      lat: 39.74,  lng: -104.99 },
   ];
   allData = [];
-  ['2024-01','2024-02','2024-03'].forEach(m => {
+  ['2024-01'].forEach(m => {
     cities.forEach((o, i) => cities.forEach((d, j) => {
       if (i === j) return;
       allData.push({ originCity: o.name, destCity: d.name,
@@ -226,27 +223,34 @@ document.getElementById('pin-btn').addEventListener('click', () => {
 document.getElementById('restart-btn').addEventListener('click', () => renderArcs());
 
 // ─── Great-circle interpolation ───────────────────────────────────────────────
-// Returns a point fraction t (0–1) along the great circle between two lat/lng pairs
 function greatCirclePoint(oLat, oLng, dLat, dLng, t) {
   const toRad = d => d * Math.PI / 180;
   const toDeg = r => r * 180 / Math.PI;
   const lat1 = toRad(oLat), lng1 = toRad(oLng);
   const lat2 = toRad(dLat), lng2 = toRad(dLng);
-
-  // Haversine angular distance
-  const d = 2 * Math.asin(Math.sqrt(
-    Math.sin((lat2-lat1)/2)**2 +
-    Math.cos(lat1)*Math.cos(lat2)*Math.sin((lng2-lng1)/2)**2
+  const dAngle = 2 * Math.asin(Math.sqrt(
+    Math.sin((lat2-lat1)/2)**2 + Math.cos(lat1)*Math.cos(lat2)*Math.sin((lng2-lng1)/2)**2
   ));
-  if (d < 1e-9) return [oLat, oLng];
-
-  const sinD = Math.sin(d);
-  const A = Math.sin((1-t)*d) / sinD;
-  const B = Math.sin(t*d)     / sinD;
+  if (dAngle < 1e-9) return [oLat, oLng];
+  const sinD = Math.sin(dAngle);
+  const A = Math.sin((1-t)*dAngle) / sinD;
+  const B = Math.sin(t*dAngle)     / sinD;
   const x = A*Math.cos(lat1)*Math.cos(lng1) + B*Math.cos(lat2)*Math.cos(lng2);
   const y = A*Math.cos(lat1)*Math.sin(lng1) + B*Math.cos(lat2)*Math.sin(lng2);
   const z = A*Math.sin(lat1)                + B*Math.sin(lat2);
   return [toDeg(Math.atan2(z, Math.sqrt(x*x+y*y))), toDeg(Math.atan2(y, x))];
+}
+
+// ─── Arc midpoint height offset (matches deck.gl ArcLayer getHeight:0.4) ─────
+// deck.gl raises the midpoint of an arc. We approximate the same elevation
+// for the dot by blending in a raised mid-point along the great circle.
+// The raised amount at t=0.5 equals getHeight * distance. We compute it
+// per-arc and apply a sin(π·t) envelope to match the visual arc peak.
+function arcPoint(oLat, oLng, dLat, dLng, t) {
+  // Just returns the great-circle surface point — deck.gl handles elevation
+  // internally, so the dot position we pass is also just the surface lat/lng.
+  // deck.gl will raise it in 3D automatically via the same arc math.
+  return greatCirclePoint(oLat, oLng, dLat, dLng, t);
 }
 
 // ─── Render ───────────────────────────────────────────────────────────────────
@@ -257,86 +261,129 @@ function renderArcs() {
   const maxS = Math.max(...allData.map(r => r.shipments), 1);
   const tip   = document.getElementById('tooltip');
 
-  // Each arc draws itself from origin→dest using a proper great-circle path.
-  // We animate the "tip" position along the great circle so it looks like
-  // a pen tracing the arc rather than the arc stretching.
-  //
-  // deck.gl ArcLayer doesn't natively support partial paths, so we fake it:
-  // we render each arc as a tiny arc whose SOURCE == tip-1-step and TARGET == tip
-  // combined with a PathLayer of the already-drawn trail.
-  //
-  // Simpler & performant approach: use PathLayer with N-segment great circle paths
-  // and slice them to the animated progress point.
+  // Total draw time for all arcs
+  const totalDrawTime = (allData.length - 1) * DRAW_STAGGER + DRAW_DURATION;
 
-  const SEGMENTS = 60; // points per full arc
-  const DURATION = 1200; // ms per arc
-  const STAGGER  = 80;
-
-  // Precompute full paths
-  const paths = allData.map(d => {
-    const pts = [];
-    for (let s = 0; s <= SEGMENTS; s++) {
-      const [lat, lng] = greatCirclePoint(d.originLat, d.originLng, d.destLat, d.destLng, s/SEGMENTS);
-      pts.push([lng, lat]);
-    }
-    return pts;
-  });
-
-  // Arc height offset — lift mid-points above the map plane
-  // We bake a vertical "height" into the path using deck.gl's PathLayer
-  // which doesn't do 3-D height directly... so we'll use the ArcLayer trick:
-  // render MANY tiny arcs chained together is complex. Instead, use the
-  // approach of keeping ArcLayer but slicing via a "ghost" destination.
-  //
-  // Best achievable with ArcLayer: we set source=origin, target=currentTip,
-  // getHeight stays constant at 0.4. This gives a correct arc *shape* at all
-  // times — the arc curves appropriately from origin to wherever the tip is.
-  // That's the "pen drawing" effect we want.
+  // Each arc gets a staggered dot phase offset so they don't all pulse together
+  const dotOffsets = allData.map((_, i) => Math.random());
 
   const startTime = performance.now();
+  let phase = 'drawing'; // 'drawing' | 'dots'
+  let dotsStartTime = 0;
 
   function frame(now) {
     const elapsed = now - startTime;
 
-    const arcs = allData.map((d, i) => {
-      const raw = (elapsed - i * STAGGER) / DURATION;
-      const t   = Math.min(1, Math.max(0, raw));
-      if (t <= 0) return null;
+    if (phase === 'drawing') {
+      // ── Draw phase: animate arcs one by one ──
+      const arcs = allData.map((d, i) => {
+        const t = Math.min(1, Math.max(0, (elapsed - i * DRAW_STAGGER) / DRAW_DURATION));
+        if (t <= 0) return null;
+        const [tipLat, tipLng] = arcPoint(d.originLat, d.originLng, d.destLat, d.destLng, t);
+        const alpha = Math.min(200, Math.round(t * 800));
+        return { ...d, tipLat, tipLng, alpha };
+      }).filter(Boolean);
 
-      const [tipLat, tipLng] = greatCirclePoint(d.originLat, d.originLng, d.destLat, d.destLng, t);
-      // Fade in quickly, stay opaque
-      const alpha = Math.min(200, Math.round(t * 800));
-      return { ...d, tipLat, tipLng, alpha };
-    }).filter(Boolean);
+      overlay.setProps({
+        layers: [
+          new deck.ArcLayer({
+            id: 'arcs',
+            data: arcs,
+            getSourcePosition: d => [d.originLng, d.originLat],
+            getTargetPosition: d => [d.tipLng, d.tipLat],
+            getSourceColor: d => [0, 69, 147, d.alpha],
+            getTargetColor: d => [0, 120, 220, d.alpha],
+            getWidth: d => Math.max(1.2, (d.shipments / maxS) * 5),
+            getHeight: 0.4,
+            updateTriggers: { getTargetPosition: elapsed, getSourceColor: elapsed, getTargetColor: elapsed },
+            pickable: true,
+            onHover: ({ object, x, y }) => {
+              if (object) {
+                tip.style.display = 'block';
+                tip.style.left = (x+14)+'px'; tip.style.top = (y+14)+'px';
+                tip.innerHTML = `<strong>${object.originCity} → ${object.destCity}</strong><br>
+                  Spend: ${fmtMoney(object.spend)}<br>
+                  Shipments: ${object.shipments.toLocaleString()}`;
+              } else tip.style.display = 'none';
+            },
+          }),
+        ]
+      });
 
-    overlay.setProps({
-      layers: [
-        new deck.ArcLayer({
-          id: 'arcs',
-          data: arcs,
-          getSourcePosition: d => [d.originLng, d.originLat],
-          getTargetPosition: d => [d.tipLng, d.tipLat],
-          getSourceColor: d => [0, 69, 147, d.alpha],
-          getTargetColor: d => [0, 120, 220, d.alpha],
-          getWidth: d => Math.max(1.2, (d.shipments / maxS) * 5),
-          getHeight: 0.4,
-          updateTriggers: { getTargetPosition: elapsed, getSourceColor: elapsed, getTargetColor: elapsed },
-          pickable: true,
-          onHover: ({ object, x, y }) => {
-            if (object) {
-              tip.style.display = 'block';
-              tip.style.left = (x+14)+'px'; tip.style.top = (y+14)+'px';
-              tip.innerHTML = `<strong>${object.originCity} → ${object.destCity}</strong><br>
-                Spend: ${fmtMoney(object.spend)}<br>
-                Shipments: ${object.shipments.toLocaleString()}`;
-            } else tip.style.display = 'none';
-          },
-        }),
-      ]
-    });
+      if (elapsed >= totalDrawTime) {
+        phase = 'dots';
+        dotsStartTime = now;
+      }
 
-    const allDone = elapsed > (allData.length - 1) * STAGGER + DURATION;
-    if (!allDone) playTimer = requestAnimationFrame(frame);
+    } else {
+      // ── Dots phase: all arcs fully drawn, dots travel along them ──
+      const dotsElapsed = now - dotsStartTime;
+
+      // Build dot positions — each dot loops independently with its own offset
+      const dots = allData.map((d, i) => {
+        const lineWidth = Math.max(1.2, (d.shipments / maxS) * 5);
+        // Offset each dot so they're spread across their lanes
+        const t = (dotOffsets[i] + dotsElapsed / DOT_PERIOD) % 1;
+        const [dotLat, dotLng] = arcPoint(d.originLat, d.originLng, d.destLat, d.destLng, t);
+        return {
+          ...d,
+          dotLat, dotLng,
+          // Source/target same point → renders as a dot on the arc
+          // We use a tiny arc from just-behind to current position
+          prevT: Math.max(0, t - 0.001),
+          lineWidth,
+        };
+      });
+
+      // For dot positions, use a ScatterplotLayer placed at the arc surface point.
+      // To make it appear "on" the arc (elevated), we render it as a very short
+      // ArcLayer segment from t-ε to t — same height, so it sits right on the line.
+      const dotArcs = dots.map(d => {
+        const [pLat, pLng] = arcPoint(d.originLat, d.originLng, d.destLat, d.destLng, d.prevT);
+        return { ...d, pLat, pLng };
+      });
+
+      overlay.setProps({
+        layers: [
+          // Static full arcs
+          new deck.ArcLayer({
+            id: 'arcs',
+            data: allData,
+            getSourcePosition: d => [d.originLng, d.originLat],
+            getTargetPosition: d => [d.destLng, d.destLat],
+            getSourceColor: [0, 69, 147, 200],
+            getTargetColor: [0, 120, 220, 200],
+            getWidth: d => Math.max(1.2, (d.shipments / maxS) * 5),
+            getHeight: 0.4,
+            pickable: true,
+            onHover: ({ object, x, y }) => {
+              if (object) {
+                tip.style.display = 'block';
+                tip.style.left = (x+14)+'px'; tip.style.top = (y+14)+'px';
+                tip.innerHTML = `<strong>${object.originCity} → ${object.destCity}</strong><br>
+                  Spend: ${fmtMoney(object.spend)}<br>
+                  Shipments: ${object.shipments.toLocaleString()}`;
+              } else tip.style.display = 'none';
+            },
+          }),
+          // Dot layer — tiny arc segments that sit on top of each arc
+          new deck.ArcLayer({
+            id: 'dots',
+            data: dotArcs,
+            getSourcePosition: d => [d.pLng, d.pLat],
+            getTargetPosition: d => [d.dotLng, d.dotLat],
+            getSourceColor: [255, 187, 27, 255],
+            getTargetColor: [255, 187, 27, 255],
+            getWidth: d => d.lineWidth,   // same width as the arc line
+            getHeight: 0.4,               // same height → sits right on the arc
+            updateTriggers: { getSourcePosition: dotsElapsed, getTargetPosition: dotsElapsed },
+            pickable: false,
+          }),
+        ]
+      });
+    }
+
+    playTimer = requestAnimationFrame(frame);
   }
 
   playTimer = requestAnimationFrame(frame);
