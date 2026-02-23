@@ -8,6 +8,7 @@
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { font-family: 'Inter', sans-serif; overflow: hidden; }
     #map { position: absolute; inset: 0; }
+    #map canvas { cursor: default !important; }
     #status {
       position: absolute; top: 16px; left: 16px;
       background: rgba(255,255,255,0.93); border: 1px solid rgba(0,0,0,0.08);
@@ -320,7 +321,7 @@ function renderArcs() {
         const p1 = fullPaths[i][Math.min(seg + 1, N_SEG)];
         const lng = p0[0] + (p1[0] - p0[0]) * frac;
         const lat = p0[1] + (p1[1] - p0[1]) * frac;
-        return { position: [lng, lat], w: lineWidths[i], originCity: d.originCity, destCity: d.destCity };
+        return { position: [lng, lat], w: lineWidths[i], originCity: d.originCity, destCity: d.destCity, spend: d.spend, shipments: d.shipments };
       });
 
       overlay.setProps({ layers: [
@@ -335,10 +336,20 @@ function renderArcs() {
         new deck.ScatterplotLayer({
           id: 'dots', data: dotData,
           getPosition: d => d.position,
-          getFillColor: [255, 187, 27, 255],
-          getRadius: d => d.w,        // radius = line width → same visual size
+          getFillColor: [0, 115, 245, 255],
+          getRadius: d => d.w,
           radiusUnits: 'pixels',
-          pickable: false,
+          pickable: true,
+          onHover: ({ object, x, y }) => {
+            if (object) {
+              tip.style.display = 'block';
+              tip.style.left = (x+14)+'px'; tip.style.top = (y+14)+'px';
+              tip.innerHTML = `
+                <strong>${object.originCity} → ${object.destCity}</strong><br>
+                Spend: ${fmtMoney(object.spend)}<br>
+                Shipments: ${object.shipments.toLocaleString()}`;
+            } else tip.style.display = 'none';
+          },
           updateTriggers: { getPosition: dotsElapsed },
         }),
       ]});
