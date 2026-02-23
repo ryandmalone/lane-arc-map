@@ -331,6 +331,8 @@ function renderArcs() {
           getColor: [0, 69, 147, 200],
           getWidth: d => d.w,
           widthUnits: 'pixels',
+          capRounded: true,
+          jointRounded: true,
           pickable: true, onHover,
         }),
         new deck.ScatterplotLayer({
