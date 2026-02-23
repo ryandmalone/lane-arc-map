@@ -337,7 +337,7 @@ function renderArcs() {
           id: 'dots', data: dotData,
           getPosition: d => d.position,
           getFillColor: [0, 115, 245, 255],
-          getRadius: d => d.w,
+          getRadius: d => d.w / 2,
           radiusUnits: 'pixels',
           pickable: true,
           onHover: ({ object, x, y }) => {
